@@ -97,6 +97,18 @@ namespace RetroArr.Core.Search
             try
             {
                 raw = await RunSearchAsync(query, result.ProviderErrors, ct).ConfigureAwait(false);
+                // If a plain title returns no plausible game releases, retry once
+                // with the platform name. Do not add unrestricted alias sweeps.
+                if (!raw.Any(IsIndividualGameRelease) && game.Platform != null)
+                {
+                    var platformName = game.Platform.Name?.Trim();
+                    if (!string.IsNullOrWhiteSpace(platformName))
+                    {
+                        var qualified = query + " " + platformName;
+                        result.Queries.Add(qualified);
+                        raw.AddRange(await RunSearchAsync(qualified, result.ProviderErrors, ct).ConfigureAwait(false));
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -120,7 +132,16 @@ namespace RetroArr.Core.Search
             // Score. Rejects stay in the list (last) so the UI can show why.
             var blockedReason = await LoadBlacklistAsync().ConfigureAwait(false);
             var scored = unique
-                .Select(r => _scorer.Score(r, game, settings, blockedReason))
+                .Select(r => IsIndividualGameRelease(r)
+                    ? _scorer.Score(r, game, settings, blockedReason)
+                    : new ScoredRelease
+                    {
+                        Release = r,
+                        Decision = ReleaseDecision.Reject,
+                        Reason = IsCollectionRelease(r.Title)
+                            ? "platform collection: requires separate archive import and file mapping"
+                            : "not categorized as a console or PC game release"
+                    })
                 .ToList();
             result.RejectedCount = scored.Count(s => s.Decision == ReleaseDecision.Reject);
             scored = scored
@@ -267,6 +288,27 @@ namespace RetroArr.Core.Search
         }
 
         // ---- Internals ----
+
+        // Category metadata from Newznab is the minimum auto-download safety gate.
+        // Generic movies, television, audio and books are not game releases.
+        // Platform-wide archives must be handled by a dedicated importer, not
+        // marked as a single game's download.
+        private static bool IsCollectionRelease(string? title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(title,
+                @"(?:complete[._\s-]*(?:rom[._\s-]*)?(?:set|collection)|no[._\s-]*intro[._\s-]*(?:set|collection)|(?:rom[._\s-]*)?(?:full|entire)[._\s-]*(?:set|collection))",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
+        private static bool IsIndividualGameRelease(SearchResult release)
+        {
+            if (IsCollectionRelease(release.Title)) return false;
+            var ids = release.Categories?.Select(c => c.Id).ToList();
+            if (ids == null || ids.Count == 0) return false;
+            return ids.Any(id => (id >= 1000 && id < 2000) || (id >= 4000 && id < 5000))
+                && !ids.Any(id => (id >= 2000 && id < 4000) || (id >= 5000 && id < 8000));
+        }
 
         private static string BuildQuery(Game game)
         {
