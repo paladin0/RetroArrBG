@@ -79,9 +79,16 @@ namespace RetroArr.Core.Search
             // Title similarity: anchor on game title plus alternative title.
             // ComputeSimilarity is forgiving enough to handle the raw release
             // title; both sides get NormalizeDiacritics-ish treatment inside.
-            var simMain = TitleCleanerService.ComputeSimilarity(release.Title, game.Title ?? string.Empty);
+            // Scene/No-Intro naming often prepends the console and appends region,
+            // dump source and release group. Compute a second similarity on the
+            // stripped title, but never bypass the existing category/platform gates.
+            var cleanedTitle = SceneGameTitle(release.Title, game);
+            var simMain = Math.Max(
+                TitleCleanerService.ComputeSimilarity(release.Title, game.Title ?? string.Empty),
+                TitleCleanerService.ComputeSimilarity(cleanedTitle, game.Title ?? string.Empty));
             var simAlt = !string.IsNullOrEmpty(game.AlternativeTitle)
-                ? TitleCleanerService.ComputeSimilarity(release.Title, game.AlternativeTitle)
+                ? Math.Max(TitleCleanerService.ComputeSimilarity(release.Title, game.AlternativeTitle),
+                    TitleCleanerService.ComputeSimilarity(cleanedTitle, game.AlternativeTitle))
                 : 0.0;
             var titleSim = Math.Max(simMain, simAlt);
             var titleSimPercent = (int)Math.Round(titleSim * 100);
@@ -275,6 +282,41 @@ namespace RetroArr.Core.Search
             }
 
             return scored;
+        }
+
+        // Only remove recognizable LEADING platform tokens and TRAILING dump
+        // metadata, never words in the middle of a game title. For example:
+        // "NGC Nintendo Gamecube Star.Wars-Rogue.Squadron.II-Rogue.Leader.Europe.SlipperyJim"
+        // becomes "Star Wars Rogue Squadron II Rogue Leader".
+        private static string SceneGameTitle(string input, Game game)
+        {
+            var title = System.Text.RegularExpressions.Regex.Replace(input,
+                @"[._]+", " ").Trim();
+            var folder = (game.Platform?.FolderName ?? "").ToLowerInvariant();
+            var prefix = folder switch
+            {
+                "gamecube" => @"(?:NGC\s+)?(?:Nintendo\s+)?(?:Gamecube|NGC)",
+                "n64" => @"(?:Nintendo\s*64|N64)",
+                "psx" or "ps1" => @"(?:Playstation\s*1?|PS1|PSX)",
+                "ps2" => @"(?:Playstation\s*2|PS2)",
+                "snes" => @"(?:SNES|Super\s*Nintendo|Super\s*Famicom)",
+                "nes" => @"(?:NES|Famicom|Nintendo\s*Entertainment\s*System)",
+                "gba" => @"(?:GBA|Game\s*Boy\s*Advance)",
+                "nds" => @"(?:NDS|Nintendo\s*DS)",
+                "wii" => @"(?:Nintendo\s*)?Wii",
+                "dreamcast" => @"(?:Sega\s*)?Dreamcast",
+                _ => null
+            };
+            if (prefix != null)
+                title = System.Text.RegularExpressions.Regex.Replace(title,
+                    @"^(?:" + prefix + @")\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            title = System.Text.RegularExpressions.Regex.Replace(title,
+                @"(?:\s+|\s*[-(]\s*)(?:USA|Europe|Japan|World|EUR|JPN|NTSC[ -]?U|PAL|Rev\s*[A-Z0-9]+)(?:\s*\))?(?:\s+.*)?$",
+                "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            title = System.Text.RegularExpressions.Regex.Replace(title,
+                @"\s+(?:SlipperyJim|ConsoleX|No[ -]?Intro|Redump)$", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return title.Trim();
         }
 
         private static ScoredRelease Reject(ScoredRelease scored, string reason)

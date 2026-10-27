@@ -97,16 +97,17 @@ namespace RetroArr.Core.Search
             try
             {
                 raw = await RunSearchAsync(query, result.ProviderErrors, ct).ConfigureAwait(false);
-                // If a plain title returns no plausible game releases, retry once
-                // with the platform name. Do not add unrestricted alias sweeps.
-                if (!raw.Any(IsIndividualGameRelease) && game.Platform != null)
+                // Newznab releases often use the platform at the FRONT, a scene alias,
+                // or punctuation-separated titles. Stop at the first plausible game
+                // category and cap extra requests to avoid hammering the indexers.
+                if (!raw.Any(IsIndividualGameRelease))
                 {
-                    var platformName = game.Platform.Name?.Trim();
-                    if (!string.IsNullOrWhiteSpace(platformName))
+                    foreach (var variant in BuildSearchVariants(game, query).Take(4))
                     {
-                        var qualified = query + " " + platformName;
-                        result.Queries.Add(qualified);
-                        raw.AddRange(await RunSearchAsync(qualified, result.ProviderErrors, ct).ConfigureAwait(false));
+                        ct.ThrowIfCancellationRequested();
+                        result.Queries.Add(variant);
+                        raw.AddRange(await RunSearchAsync(variant, result.ProviderErrors, ct).ConfigureAwait(false));
+                        if (raw.Any(IsIndividualGameRelease)) break;
                     }
                 }
             }
@@ -297,7 +298,7 @@ namespace RetroArr.Core.Search
         {
             if (string.IsNullOrWhiteSpace(title)) return false;
             return System.Text.RegularExpressions.Regex.IsMatch(title,
-                @"(?:complete[._\s-]*(?:rom[._\s-]*)?(?:set|collection)|no[._\s-]*intro[._\s-]*(?:set|collection)|(?:rom[._\s-]*)?(?:full|entire)[._\s-]*(?:set|collection))",
+                @"(?:complete[._\s-]*(?:rom[._\s-]*)?(?:set|collection)|no[._\s-]*intro[._\s-]*(?:set|collection)|(?:rom[._\s-]*)?(?:full|entire)[._\s-]*(?:set|collection)|(?:rom[._\s-]*set|redump[._\s-]*set|good[._\s-]*(?:roms|set)|mega[._\s-]*pack))",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
@@ -308,6 +309,69 @@ namespace RetroArr.Core.Search
             if (ids == null || ids.Count == 0) return false;
             return ids.Any(id => (id >= 1000 && id < 2000) || (id >= 4000 && id < 5000))
                 && !ids.Any(id => (id >= 2000 && id < 4000) || (id >= 5000 && id < 8000));
+        }
+
+        // These are search aliases, not proof of platform identity. The separate
+        // PlatformDetector and ReleaseScorer still decide whether a hit is safe.
+        private static IEnumerable<string> PlatformAliases(Game game)
+        {
+            var key = (game.Platform?.FolderName ?? game.Platform?.Slug ?? game.Platform?.Name ?? "")
+                .ToLowerInvariant().Replace(" ", "").Replace("-", "");
+            return key switch
+            {
+                "n64" or "nintendo64" => new[] { "Nintendo64", "N64", "Nintendo 64" },
+                "gamecube" or "gc" or "ngc" => new[] { "NGC Nintendo Gamecube", "GameCube", "NGC" },
+                "snes" or "sfc" => new[] { "SNES", "Super Nintendo", "Super Famicom" },
+                "nes" => new[] { "NES", "Nintendo Entertainment System", "Famicom" },
+                "psx" or "ps1" or "playstation" => new[] { "PSX", "PS1", "PlayStation" },
+                "ps2" => new[] { "PS2", "PlayStation 2", "PS2 ISO" },
+                "ps3" => new[] { "PS3", "PlayStation 3" },
+                "psp" => new[] { "PSP", "PlayStation Portable" },
+                "gb" => new[] { "Game Boy", "GB" },
+                "gbc" => new[] { "Game Boy Color", "GBC" },
+                "gba" => new[] { "GBA", "Game Boy Advance" },
+                "nds" => new[] { "NDS", "Nintendo DS" },
+                "3ds" => new[] { "3DS", "Nintendo 3DS" },
+                "wii" => new[] { "Wii", "Nintendo Wii" },
+                "wiiu" => new[] { "Wii U", "WiiU" },
+                "switch" => new[] { "NSW", "Nintendo Switch" },
+                "dreamcast" => new[] { "Dreamcast", "DC", "Sega Dreamcast" },
+                "saturn" => new[] { "Sega Saturn", "Saturn" },
+                "megadrive" or "genesis" => new[] { "Mega Drive", "Genesis", "Sega Genesis" },
+                "mastersystem" => new[] { "Master System", "SMS" },
+                "arcade" => new[] { "MAME", "Arcade" },
+                "windows" or "pc" => new[] { "PC", "Windows" },
+                _ => string.IsNullOrWhiteSpace(game.Platform?.Name)
+                    ? Array.Empty<string>() : new[] { game.Platform!.Name }
+            };
+        }
+
+        private static IEnumerable<string> BuildSearchVariants(Game game, string title)
+        {
+            var aliases = PlatformAliases(game).Take(3).ToArray();
+            var candidates = new List<string>();
+            foreach (var alias in aliases)
+            {
+                candidates.Add(alias + " " + title);
+                candidates.Add(title + " " + alias);
+            }
+            // Scene uploads frequently omit colons and subtitles, or use the
+            // subtitle on its own. Keep short generic fragments out of searches.
+            var titleWithoutArticle = System.Text.RegularExpressions.Regex.Replace(title,
+                @"^(?:The|A|An)\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (titleWithoutArticle != title) candidates.Add(titleWithoutArticle);
+            if (!string.IsNullOrWhiteSpace(game.AlternativeTitle))
+                candidates.Add(BuildQueryText(game.AlternativeTitle));
+            return candidates.Where(x => !string.IsNullOrWhiteSpace(x) && x.Length >= 6)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(x => !string.Equals(x, title, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static string BuildQueryText(string text)
+        {
+            var clean = System.Text.RegularExpressions.Regex.Replace(text,
+                @"[:\(\)\[\]\{\}""'™®©\p{Pd}]", " ");
+            return System.Text.RegularExpressions.Regex.Replace(clean, @"\s{2,}", " ").Trim();
         }
 
         private static string BuildQuery(Game game)
