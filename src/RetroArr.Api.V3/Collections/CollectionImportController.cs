@@ -81,12 +81,12 @@ namespace RetroArr.Api.V3.Collections
             if (!path.StartsWith(Path.GetFullPath(folder) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new ArgumentException("File escapes collection folder");
             var cursor = folder;
-            if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinked collection folders are not allowed");
+            if ((System.IO.File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinked collection folders are not allowed");
             foreach (var segment in relative.Split('/'))
             {
                 if (segment is "" or "." or "..") throw new ArgumentException("Invalid path component");
                 cursor = Path.Combine(cursor, segment);
-                if ((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinks are not allowed");
+                if ((System.IO.File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinks are not allowed");
             }
             return path;
         }
@@ -96,7 +96,7 @@ namespace RetroArr.Api.V3.Collections
                 ?? throw new ArgumentException("Unknown platform");
             var folder = Path.Combine(StagingRoot, SafeFolder(request.CollectionFolder));
             if (!Directory.Exists(folder)) throw new DirectoryNotFoundException("Collection staging folder not found");
-            if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinked folder not allowed");
+            if ((System.IO.File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0) throw new ArgumentException("Symlinked folder not allowed");
             var games = await _db.Games.AsNoTracking().Where(g => g.PlatformId == request.PlatformId)
                 .Select(g => new { g.Id, g.Title, g.AlternativeTitle }).ToListAsync();
             var lookup = games.SelectMany(g => new[] { g.Title, g.AlternativeTitle }.Where(t => !string.IsNullOrEmpty(t))
@@ -122,7 +122,7 @@ namespace RetroArr.Api.V3.Collections
                 });
             }
             var stamp = string.Join("\n", inventory.Candidates.OrderBy(x => x.File, StringComparer.Ordinal).Select(x =>
-                $"{x.File}|{x.Size}|{File.GetLastWriteTimeUtc(Path.Combine(folder, x.File)).Ticks}"));
+                $"{x.File}|{x.Size}|{System.IO.File.GetLastWriteTimeUtc(Path.Combine(folder, x.File)).Ticks}"));
             inventory.Token = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{request.PlatformId}|{request.CollectionFolder}|{stamp}")));
             return inventory;
         }
@@ -172,7 +172,7 @@ namespace RetroArr.Api.V3.Collections
                     var platformFolder = Regex.Replace(inv.Platform.FolderName, @"[^a-zA-Z0-9_-]", "");
                     if (string.IsNullOrWhiteSpace(platformFolder)) return BadRequest(new { error = "Unsafe platform destination" });
                     var targetDir = Path.Combine(LibraryRoot, platformFolder);
-                    if (Directory.Exists(targetDir) && (File.GetAttributes(targetDir) & FileAttributes.ReparsePoint) != 0)
+                    if (Directory.Exists(targetDir) && (System.IO.File.GetAttributes(targetDir) & FileAttributes.ReparsePoint) != 0)
                         return BadRequest(new { error = "Symlinked library directories are not allowed" });
                     Directory.CreateDirectory(targetDir);
                     var target = Path.Combine(targetDir, Path.GetFileName(original));
@@ -214,4 +214,5 @@ namespace RetroArr.Api.V3.Collections
         }
     }
 }
+
 
