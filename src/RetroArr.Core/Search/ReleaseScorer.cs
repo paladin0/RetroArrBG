@@ -52,6 +52,7 @@ namespace RetroArr.Core.Search
             // (no folder or "unknown"), allow through with a signal so the
             // user knows to double-check, but never auto-download it.
             var gamePlatformFolder = game.Platform?.FolderName?.Trim();
+            var confirmedPlatform = false;
             var platformUnknown = string.IsNullOrEmpty(release.PlatformFolder)
                 || string.Equals(release.PlatformFolder, "unknown", StringComparison.OrdinalIgnoreCase);
             if (!platformUnknown && !string.IsNullOrEmpty(gamePlatformFolder))
@@ -60,6 +61,7 @@ namespace RetroArr.Core.Search
                 {
                     return Reject(scored, $"platform mismatch: release={release.PlatformFolder}, game={gamePlatformFolder}");
                 }
+                confirmedPlatform = true;
                 scored.Signals.Add($"platform match ({release.PlatformFolder})");
             }
             else if (platformUnknown)
@@ -111,6 +113,15 @@ namespace RetroArr.Core.Search
             // 2. Base score from title similarity (0-40)
             var score = (int)Math.Round(titleSim * 40);
             scored.Signals.Add($"title similarity {titleSimPercent}% (+{score})");
+
+            // A confirmed platform is corroborating evidence, but not enough to
+            // approve a download by itself. No bonus when detection is unknown.
+            if (confirmedPlatform)
+            {
+                const int platformMatchBonus = 10;
+                score += platformMatchBonus;
+                scored.Signals.Add($"confirmed platform (+{platformMatchBonus})");
+            }
 
             // 3. Source / release group
             var trustedSource = false;
@@ -252,9 +263,29 @@ namespace RetroArr.Core.Search
             score = Math.Max(0, Math.Min(100, score));
             scored.Score = score;
 
+            // Distinguish a strong title/platform match from uploader trust.
+            // Unknown uploaders and Virtual Console packages can be reviewed,
+            // but are never eligible for unattended downloads. A Virtual Console
+            // package is not guaranteed to be an original console ROM.
+            var virtualConsole = System.Text.RegularExpressions.Regex.IsMatch(
+                release.Title, @"(?:^|[._\s-])Virtual[._\s-]*Console(?:$|[._\s-])",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var highConfidenceMatch = confirmedPlatform && titleSimPercent >= 90;
+            if (virtualConsole)
+                scored.Signals.Add("Virtual Console format - verify file format manually");
+
+            if (highConfidenceMatch && (virtualConsole || !trustedSource))
+            {
+                scored.Decision = ReleaseDecision.Review;
+                scored.Reason = virtualConsole
+                    ? "Virtual Console format requires manual review"
+                    : "strong title/platform match; unverified source requires manual review";
+                return scored;
+            }
+
             if (score >= settings.AutoDownloadThreshold)
             {
-                if (settings.RequireTrustedSourceForAuto && !trustedSource)
+                if (!trustedSource)
                 {
                     scored.Decision = ReleaseDecision.Review;
                     scored.Reason = "high score but no trusted source - manual review";
@@ -269,6 +300,11 @@ namespace RetroArr.Core.Search
                     scored.Decision = ReleaseDecision.AutoDownload;
                     scored.Reason = "above auto-download threshold";
                 }
+            }
+            else if (virtualConsole && confirmedPlatform && titleSimPercent >= settings.MinTitleSimilarityPercent)
+            {
+                scored.Decision = ReleaseDecision.Review;
+                scored.Reason = "Virtual Console format requires manual review";
             }
             else if (score >= settings.ReviewThreshold)
             {
