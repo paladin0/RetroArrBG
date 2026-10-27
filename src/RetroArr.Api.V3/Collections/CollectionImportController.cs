@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -32,7 +32,7 @@ namespace RetroArr.Api.V3.Collections
         };
         public CollectionImportController(RetroArrDbContext db) => _db = db;
 
-        public sealed class PreviewRequest
+        public class PreviewRequest
         {
             public string CollectionFolder { get; set; } = ""; // path relative to /downloads
             public int PlatformId { get; set; }
@@ -214,3 +214,4 @@ namespace RetroArr.Api.V3.Collections
         }
     }
 }
+
