@@ -9,6 +9,7 @@ const About = React.lazy(() => import('./pages/About'));
 const User = React.lazy(() => import('./pages/User'));
 const Status = React.lazy(() => import('./pages/Status'));
 const Collections = React.lazy(() => import('./pages/Collections'));
+const CollectionAcquisition = React.lazy(() => import('./pages/CollectionAcquisition'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
 const Statistics = React.lazy(() => import('./pages/Statistics'));
 const Problems = React.lazy(() => import('./pages/Problems'));
@@ -74,6 +75,7 @@ function App() {
               <Route path="/game/:id" element={<GameDetails />} />
               <Route path="/game/:id/saves" element={<SaveStates />} />
               <Route path="/collections" element={<Collections />} />
+              <Route path="/collection-acquisition" element={<CollectionAcquisition />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/about" element={<About />} />
               <Route path="/trash" element={<Trash />} />
