@@ -29,6 +29,9 @@ const DEFAULT_SETTINGS: MonitorSettings = {
   hackPatchTokens: ['[Hack]', '[Patch]', '(Hack)', 'Kaizo', 'Translation', 'Translated', 'FanTranslation'],
   preferredRegion: '',
   requireTrustedSourceForAuto: true,
+  autoDownloadStrongUnverifiedNzb: false,
+  strongUnverifiedMinSimilarityPercent: 98,
+  strongUnverifiedMinScore: 39,
 };
 
 const MonitorSettingsTab: React.FC<Props> = ({ t }) => {
@@ -43,7 +46,7 @@ const MonitorSettingsTab: React.FC<Props> = ({ t }) => {
     setError(null);
     try {
       const resp = await monitorApi.getSettings();
-      setSettings(resp.data);
+      setSettings({ ...DEFAULT_SETTINGS, ...resp.data });
     } catch (e) {
       setError(getErrorMessage(e, t('monitorSettingsLoadFailed')));
     } finally {
@@ -219,6 +222,36 @@ const MonitorSettingsTab: React.FC<Props> = ({ t }) => {
           />
           <span>{t('monitorSettingsRequireTrusted')}</span>
         </label>
+      </div>
+
+      <h3>Strong-match NZB auto-download (V21)</h3>
+      <p className="settings-description">
+        Optional exception for individual NZB game releases with a confirmed console and a very close title match.
+        Existing wrong-platform, Virtual Console and format rejection rules still apply.
+        This does not enable automatic collection downloads.
+      </p>
+      <div className="form-group">
+        <label className="checkbox-row">
+          <input type="checkbox"
+            checked={settings.autoDownloadStrongUnverifiedNzb ?? false}
+            onChange={e => setSettings(prev => ({ ...prev, autoDownloadStrongUnverifiedNzb: e.target.checked }))}
+            disabled={saving} />
+          <span>Allow strong unverified NZB matches to auto-download</span>
+        </label>
+      </div>
+      <div className="form-group">
+        <label>Strong-match minimum title similarity (%)</label>
+        <input type="number" min={95} max={100} step={1}
+          value={settings.strongUnverifiedMinSimilarityPercent ?? 98}
+          onChange={num('strongUnverifiedMinSimilarityPercent')} disabled={saving} />
+        <small className="settings-hint">Minimum enforced by the backend: 95%. Recommended: 98%.</small>
+      </div>
+      <div className="form-group">
+        <label>Strong-match minimum score (0-100)</label>
+        <input type="number" min={35} max={100} step={1}
+          value={settings.strongUnverifiedMinScore ?? 39}
+          onChange={num('strongUnverifiedMinScore')} disabled={saving} />
+        <small className="settings-hint">Minimum enforced by the backend: 35. Recommended: 39.</small>
       </div>
 
       <button type="button" className="btn-primary" onClick={save} disabled={saving}>

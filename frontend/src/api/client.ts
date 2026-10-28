@@ -984,6 +984,9 @@ export interface MonitorSettings {
   hackPatchTokens: string[];
   preferredRegion: string;
   requireTrustedSourceForAuto: boolean;
+  autoDownloadStrongUnverifiedNzb: boolean;
+  strongUnverifiedMinSimilarityPercent: number;
+  strongUnverifiedMinScore: number;
 }
 
 export interface ScoredReleaseDto {

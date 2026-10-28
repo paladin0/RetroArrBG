@@ -220,6 +220,8 @@ namespace RetroArr.Api.V3.Monitor
             settings.MinSeedersTorrent = Math.Max(0, settings.MinSeedersTorrent);
             settings.MinTitleSimilarityPercent = Math.Clamp(settings.MinTitleSimilarityPercent, 0, 100);
             settings.MaxReleaseAgeDays = Math.Max(0, settings.MaxReleaseAgeDays);
+            settings.StrongUnverifiedMinSimilarityPercent = Math.Clamp(settings.StrongUnverifiedMinSimilarityPercent, 95, 100);
+            settings.StrongUnverifiedMinScore = Math.Clamp(settings.StrongUnverifiedMinScore, 35, 100);
             _config.SaveMonitorSettings(settings);
             return Ok(settings);
         }
