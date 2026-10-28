@@ -274,12 +274,41 @@ namespace RetroArr.Core.Search
             if (virtualConsole)
                 scored.Signals.Add("Virtual Console format - verify file format manually");
 
+            // V21: Separate strong-match auto-download from source reputation.
+            // It is an explicit opt-in for NZB *individual* game releases only.
+            // The caller has already enforced game categories and excluded collections.
+            // Unknown formats (including Virtual Console), unknown platforms and
+            // unknown sizes are never eligible for this fallback.
+            var nzbProtocol = string.Equals(release.Protocol, "nzb", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(release.Protocol, "usenet", StringComparison.OrdinalIgnoreCase);
+            var strongUnverifiedAuto = settings.AutoDownloadStrongUnverifiedNzb
+                && !trustedSource
+                && !virtualConsole
+                && confirmedPlatform
+                && titleSimPercent >= Math.Max(95, settings.StrongUnverifiedMinSimilarityPercent)
+                && score >= Math.Max(35, settings.StrongUnverifiedMinScore)
+                && nzbProtocol
+                && release.Size > 0
+                && (game.Platform != null && MaxReasonableSize(game.Platform) > 0)
+                && (game.Platform != null && release.Size <= MaxReasonableSize(game.Platform))
+                && !System.Text.RegularExpressions.Regex.IsMatch(release.Title,
+                    @"(?:^|[._\s-])(?:demo|beta|alpha|trainer|crack|update|dlc|repack|virtual[._\s-]*console)(?:$|[._\s-])",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (highConfidenceMatch && (virtualConsole || !trustedSource))
             {
-                scored.Decision = ReleaseDecision.Review;
-                scored.Reason = virtualConsole
-                    ? "Virtual Console format requires manual review"
-                    : "strong title/platform match; unverified source requires manual review";
+                if (strongUnverifiedAuto)
+                {
+                    scored.Decision = ReleaseDecision.AutoDownload;
+                    scored.Reason = "explicitly enabled strong-match NZB auto-download";
+                    scored.Signals.Add("strong unverified NZB policy accepted - inspect downloaded format on import");
+                }
+                else
+                {
+                    scored.Decision = ReleaseDecision.Review;
+                    scored.Reason = virtualConsole
+                        ? "Virtual Console format requires manual review"
+                        : "strong title/platform match; unverified source requires manual review";
+                }
                 return scored;
             }
 

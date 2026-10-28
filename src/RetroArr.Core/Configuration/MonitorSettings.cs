@@ -66,6 +66,13 @@ namespace RetroArr.Core.Configuration
         // ineligible for auto-download (still surfaces in the manual view).
         public bool RequireTrustedSourceForAuto { get; set; } = true;
 
+        // V21: optional conservative fallback for otherwise unverified NZB releases.
+        // Disabled by default to preserve user-controlled trust settings.
+        // Enable explicitly in the existing monitor configuration after a dry run.
+        public bool AutoDownloadStrongUnverifiedNzb { get; set; } = false;
+        public int StrongUnverifiedMinSimilarityPercent { get; set; } = 98;
+        public int StrongUnverifiedMinScore { get; set; } = 39;
+
         // Factory used by ConfigurationService when no monitor.json exists
         // yet. Centralises the "sensible starter values" so the on-disk
         // schema can stay empty-by-default.
