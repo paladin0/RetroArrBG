@@ -272,10 +272,24 @@ namespace RetroArr.Core.Download
                 // Check if result > 0 (ID of added file)
                 using var doc = JsonDocument.Parse(responseContent);
                 var root = doc.RootElement;
-                if (root.TryGetProperty("result", out var resultElement))
+                if (root.TryGetProperty("error", out var rpcError) &&
+                    rpcError.ValueKind != JsonValueKind.Null &&
+                    rpcError.ValueKind != JsonValueKind.Undefined)
                 {
-                   return resultElement.GetInt32() > 0;
+                    // Do not emit the whole server response: it can contain user data.
+                    var code = rpcError.TryGetProperty("code", out var errorCode)
+                        ? errorCode.ToString() : "unknown";
+                    _logger.Warn($"[NZBGet] append rejected by JSON-RPC (code {code})");
+                    return false;
                 }
+                if (root.TryGetProperty("result", out var resultElement) &&
+                    resultElement.ValueKind == JsonValueKind.Number &&
+                    resultElement.TryGetInt32(out var nzbJobId) && nzbJobId > 0)
+                {
+                    _logger.Info($"[NZBGet] append accepted; NZBGet job ID {nzbJobId}");
+                    return true;
+                }
+                _logger.Warn("[NZBGet] append returned no positive job ID");
                 return false;
                 }
                 finally
@@ -302,7 +316,9 @@ namespace RetroArr.Core.Download
                 using var xmlReader = System.Xml.XmlReader.Create(stream,
                     new System.Xml.XmlReaderSettings
                     {
-                        DtdProcessing = System.Xml.DtdProcessing.Prohibit,
+                        // Standard NZB documents may declare <!DOCTYPE nzb ...>.
+                        // Ignore the declaration without fetching external DTDs or expanding entities.
+                        DtdProcessing = System.Xml.DtdProcessing.Ignore,
                         XmlResolver = null,
                         MaxCharactersInDocument = 32L * 1024 * 1024
                     });
@@ -325,7 +341,7 @@ namespace RetroArr.Core.Download
             }
             catch (System.Xml.XmlException ex)
             {
-                throw new InvalidDataException("Indexer returned malformed NZB XML", ex);
+                throw new InvalidDataException($"Indexer returned malformed NZB XML ({ex.GetType().Name}: {ex.Message})", ex);
             }
         }
 
