@@ -549,13 +549,13 @@ namespace RetroArr.Core.Search
             var platformFolder = game.Platform?.FolderName;
             _platformTracker.Track(url, platformFolder, game.Id, null);
 
-            var sent = await SendToClientAsync(client, url).ConfigureAwait(false);
+            var sent = await SendToClientAsync(client, url, release).ConfigureAwait(false);
             // A grab the client didn't take must not hold back the next search as a pending one
             if (!sent) _platformTracker.Untrack(url);
             return sent;
         }
 
-        private static async Task<bool> SendToClientAsync(DownloadClient client, string url)
+        private async Task<bool> SendToClientAsync(DownloadClient client, string url, SearchResult release)
         {
             bool sent = false;
             try
@@ -579,8 +579,13 @@ namespace RetroArr.Core.Search
                             .AddNzbAsync(url, client.Category ?? string.Empty).ConfigureAwait(false);
                         break;
                     case "nzbget":
-                        sent = await new NzbgetClient(client.Host, client.Port, client.Username ?? string.Empty, client.Password ?? string.Empty, client.UrlBase)
-                            .AddNzbAsync(url, client.Category ?? string.Empty).ConfigureAwait(false);
+                        var nzbget = new NzbgetClient(client.Host, client.Port, client.Username ?? string.Empty, client.Password ?? string.Empty, client.UrlBase);
+                        var prowlarr = _config.LoadProwlarrSettings();
+                        sent = release.Provider.Equals("Prowlarr", StringComparison.OrdinalIgnoreCase) &&
+                               release.IndexerId > 0 && prowlarr.IsConfigured && prowlarr.Enabled
+                            ? await nzbget.AddNzbFromProwlarrAsync(url, release.IndexerId,
+                                prowlarr.Url, prowlarr.ApiKey, client.Category ?? string.Empty).ConfigureAwait(false)
+                            : await nzbget.AddNzbAsync(url, client.Category ?? string.Empty).ConfigureAwait(false);
                         break;
                     default:
                         _logger.Warn($"[Monitor] dispatch skipped: unknown client implementation '{client.Implementation}'.");

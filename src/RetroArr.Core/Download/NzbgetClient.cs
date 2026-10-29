@@ -118,7 +118,43 @@ namespace RetroArr.Core.Download
             throw new NotSupportedException("NZBGet does not handle torrent downloads. Configure qBittorrent, Transmission or Deluge as a torrent client.");
         }
 
-        public async Task<bool> AddNzbAsync(string nzbUrl, string? category = null)
+        // Search results from Prowlarr include the originating indexer ID. Fetch through
+        // Prowlarr so its configured indexer authentication, proxy and UA are used.
+        // The API key is sent ONLY to the configured Prowlarr origin.
+        public Task<bool> AddNzbFromProwlarrAsync(string nzbUrl, int indexerId,
+            string prowlarrBaseUrl, string prowlarrApiKey, string? category = null)
+        {
+            if (indexerId <= 0 || string.IsNullOrWhiteSpace(prowlarrBaseUrl) ||
+                string.IsNullOrWhiteSpace(prowlarrApiKey))
+                return AddNzbAsync(nzbUrl, category);
+
+            if (!Uri.TryCreate(prowlarrBaseUrl, UriKind.Absolute, out var baseUri) ||
+                (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
+            {
+                _logger.Warn("[NZBGet] Invalid configured Prowlarr address");
+                return Task.FromResult(false);
+            }
+            if (!Uri.TryCreate(nzbUrl, UriKind.Absolute, out var releaseUri) ||
+                (releaseUri.Scheme != Uri.UriSchemeHttp && releaseUri.Scheme != Uri.UriSchemeHttps))
+            {
+                _logger.Warn("[NZBGet] Invalid indexer release URL");
+                return Task.FromResult(false);
+            }
+            // The release URL is URL-encoded as the 'link' parameter; never log it.
+            var endpoint = new Uri(baseUri, $"/api/v1/indexer/{indexerId}/download?link={Uri.EscapeDataString(nzbUrl)}");
+            return AddNzbValidatedAsync(endpoint, category, prowlarrApiKey, baseUri);
+        }
+
+        public Task<bool> AddNzbAsync(string nzbUrl, string? category = null)
+        {
+            if (!Uri.TryCreate(nzbUrl, UriKind.Absolute, out var url) ||
+                (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+                return Task.FromResult(false);
+            return AddNzbValidatedAsync(url, category, null, null);
+        }
+
+        private async Task<bool> AddNzbValidatedAsync(Uri nzbUri, string? category,
+            string? prowlarrApiKey, Uri? prowlarrOrigin)
         {
             try
             {
@@ -126,15 +162,42 @@ namespace RetroArr.Core.Download
                 // return HTTP 200 with <error code="109" .../> to anonymous HTTP clients.
                 using var nzbDownloader = new HttpClient(new HttpClientHandler
                 {
-                    AutomaticDecompression = System.Net.DecompressionMethods.All
+                    AutomaticDecompression = System.Net.DecompressionMethods.All,
+                    AllowAutoRedirect = false
                 }) { Timeout = TimeSpan.FromSeconds(60) };
                 nzbDownloader.DefaultRequestHeaders.UserAgent.ParseAdd(
                     "Mozilla/5.0 (compatible; RetroArr/1.0; +https://github.com/paladin0/RetroArrBG)");
                 nzbDownloader.DefaultRequestHeaders.Accept.ParseAdd("application/x-nzb");
                 nzbDownloader.DefaultRequestHeaders.Accept.ParseAdd("application/xml");
-                using var nzbResponse = await nzbDownloader.GetAsync(nzbUrl,
+                // Do not allow an authentication header to follow redirects off Prowlarr.
+                using var request = new HttpRequestMessage(HttpMethod.Get, nzbUri);
+                if (!string.IsNullOrEmpty(prowlarrApiKey) && prowlarrOrigin != null &&
+                    nzbUri.Scheme == prowlarrOrigin.Scheme &&
+                    nzbUri.Host.Equals(prowlarrOrigin.Host, StringComparison.OrdinalIgnoreCase) &&
+                    nzbUri.Port == prowlarrOrigin.Port)
+                    request.Headers.Add("X-Api-Key", prowlarrApiKey);
+                using var initialResponse = await nzbDownloader.SendAsync(request,
                     HttpCompletionOption.ResponseHeadersRead);
-                nzbResponse.EnsureSuccessStatusCode();
+                // A redirected indexer URL is fetched without the Prowlarr API key.
+                // Never forward that credential to the indexer's external host.
+                HttpResponseMessage? redirectedResponse = null;
+                try
+                {
+                    var nzbResponse = initialResponse;
+                    if ((int)initialResponse.StatusCode >= 300 && (int)initialResponse.StatusCode < 400)
+                    {
+                        var location = initialResponse.Headers.Location;
+                        if (location == null)
+                            throw new InvalidDataException("Indexer redirect did not specify a location");
+                        var redirectUri = location.IsAbsoluteUri ? location : new Uri(nzbUri, location);
+                        if (redirectUri.Scheme != Uri.UriSchemeHttps && redirectUri.Scheme != Uri.UriSchemeHttp)
+                            throw new InvalidDataException("Indexer returned an unsupported redirect");
+                        using var redirectRequest = new HttpRequestMessage(HttpMethod.Get, redirectUri);
+                        redirectedResponse = await nzbDownloader.SendAsync(redirectRequest,
+                            HttpCompletionOption.ResponseHeadersRead);
+                        nzbResponse = redirectedResponse;
+                    }
+                    nzbResponse.EnsureSuccessStatusCode();
                 const long maxNzbSize = 32L * 1024 * 1024;
                 if (nzbResponse.Content.Headers.ContentLength > maxNzbSize)
                     throw new InvalidDataException("Indexer NZB response exceeds 32 MiB");
@@ -157,7 +220,7 @@ namespace RetroArr.Core.Download
                     method = "append",
                     @params = new object[] 
                     { 
-                        BuildNzbFilename(nzbUrl, nzbResponse.Content.Headers.ContentDisposition), // Filename, becomes NZBName
+                        BuildNzbFilename(nzbUri.ToString(), nzbResponse.Content.Headers.ContentDisposition), // Filename, becomes NZBName
                         nzbBase64,              // Content (Base64)
                         category ?? "",         // Category
                         0,                      // Priority
@@ -186,6 +249,11 @@ namespace RetroArr.Core.Download
                    return resultElement.GetInt32() > 0;
                 }
                 return false;
+                }
+                finally
+                {
+                    redirectedResponse?.Dispose();
+                }
             }
             catch (Exception ex)
             {
