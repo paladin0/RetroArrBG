@@ -149,10 +149,24 @@ namespace RetroArr.Core.Search
                     }
                 }
             }
-            if (!trustedSource)
+            // Older console dumps typically have no FitGirl/CODEX-style release group.
+            // Do not penalise an otherwise exact, platform-confirmed archival NZB simply
+            // because the uploader is unnamed. This is not a trust endorsement: the
+            // explicit strong-unverified-NZB opt-in and platform/format safeguards below
+            // still govern automatic downloading.
+            var archivalConsoleMatch = confirmedPlatform
+                && !IsPcPlatform(game.Platform)
+                && titleSimPercent >= 95
+                && (string.Equals(release.Protocol, "nzb", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(release.Protocol, "usenet", StringComparison.OrdinalIgnoreCase));
+            if (!trustedSource && !archivalConsoleMatch)
             {
                 score -= settings.UnknownUploaderPenalty;
                 scored.Signals.Add($"unknown uploader (-{settings.UnknownUploaderPenalty})");
+            }
+            else if (!trustedSource && archivalConsoleMatch)
+            {
+                scored.Signals.Add("legacy console NZB: no PC-style release-group penalty (source unverified)");
             }
 
             // Per-game preferred release group bonus. Strongest single
@@ -370,11 +384,22 @@ namespace RetroArr.Core.Search
                 "nds" => @"(?:NDS|Nintendo\s*DS)",
                 "wii" => @"(?:Nintendo\s*)?Wii",
                 "dreamcast" => @"(?:Sega\s*)?Dreamcast",
+                "ps3" => @"(?:Playstation\s*3|PS3)",
+                "xbox360" => @"(?:Xbox[\s-]*360|X360|360)",
+                "dos" or "msdos" => @"(?:MS[\s-]*DOS|DOS)",
                 _ => null
             };
             if (prefix != null)
                 title = System.Text.RegularExpressions.Regex.Replace(title,
                     @"^(?:" + prefix + @")\s+", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Platforms and common archival labels can occur at the END of a scene
+            // release, e.g. Armored.Core.For.Answer.XBOX360-Group or
+            // Airborne.Ranger.MS-DOS. Only strip an exact platform token belonging
+            // to the requested game; never infer a platform match from it here.
+            if (prefix != null)
+                title = System.Text.RegularExpressions.Regex.Replace(title,
+                    @"\s+(?:" + prefix + @")(?:\s*[- ]\s*[A-Za-z0-9]{2,18})?$",
+                    "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             title = System.Text.RegularExpressions.Regex.Replace(title,
                 @"(?:\s+|\s*[-(]\s*)(?:USA|Europe|Japan|World|EUR|JPN|NTSC[ -]?U|PAL|Rev\s*[A-Z0-9]+)(?:\s*\))?(?:\s+.*)?$",
                 "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -391,6 +416,13 @@ namespace RetroArr.Core.Search
             scored.Reason = reason;
             scored.Signals.Add($"REJECT: {reason}");
             return scored;
+        }
+
+        private static bool IsPcPlatform(Platform? platform)
+        {
+            if (platform == null) return false;
+            var key = (platform.Slug ?? platform.FolderName ?? string.Empty).ToLowerInvariant();
+            return key is "windows" or "pc" or "linux" or "mac" or "macos";
         }
 
         // Rough upper bound per platform in bytes. Anything beyond ~3x of this
