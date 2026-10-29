@@ -279,8 +279,24 @@ namespace RetroArr.Core.Download.TrackedDownloads
         private static string? LocalPath(string? outputPath, DownloadClient? clientConfig)
         {
             if (clientConfig == null) return null;
-            if (string.IsNullOrEmpty(outputPath) || string.IsNullOrEmpty(clientConfig.RemotePathMapping) || string.IsNullOrEmpty(clientConfig.LocalPathMapping))
+            if (string.IsNullOrEmpty(outputPath)) return outputPath;
+            // A file path in NZBGet's container can differ from RetroArr's /downloads mount.
+            // Explicit remote path mappings always take precedence.
+            if (string.IsNullOrEmpty(clientConfig.RemotePathMapping) || string.IsNullOrEmpty(clientConfig.LocalPathMapping))
+            {
+                if (File.Exists(outputPath) || Directory.Exists(outputPath)) return outputPath;
+                if (clientConfig.Implementation.Equals("NZBGet", StringComparison.OrdinalIgnoreCase))
+                {
+                    var normalized = outputPath.Replace('\\', '/');
+                    foreach (var prefix in new[] { "/mnt/Media/downloads", "/media/downloads" })
+                    {
+                        if (!normalized.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase)) continue;
+                        var local = Path.Combine("/downloads", normalized.Substring(prefix.Length).TrimStart('/'));
+                        if (File.Exists(local) || Directory.Exists(local)) return local;
+                    }
+                }
                 return outputPath;
+            }
             if (!outputPath.StartsWith(clientConfig.RemotePathMapping, StringComparison.OrdinalIgnoreCase)) return null;
             var relative = outputPath.Substring(clientConfig.RemotePathMapping.Length).TrimStart('/', '\\');
             return Path.Combine(clientConfig.LocalPathMapping, relative);

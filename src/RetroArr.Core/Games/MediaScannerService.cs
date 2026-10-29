@@ -511,6 +511,10 @@ namespace RetroArr.Core.Games
 
                 if (Directory.Exists(full))
                 {
+                    // Folder-dump PS3 games (e.g. NHL 09/BLES00298/PS3_GAME/PARAM.SFO)
+                    // must be counted as installed, unlike empty catalogue placeholders.
+                    if (platform != null && platform.FolderName.Equals("ps3", StringComparison.OrdinalIgnoreCase)
+                        && HasPs3DiscContent(full)) return GameContent.Present;
                     if (exe != null && IsUnder(exe, full) && File.Exists(exe) && !InSupplementaryFolder(exe, full) && IsContent(exe))
                         return GameContent.Present;
                     return FolderHasContent(new DirectoryInfo(full), rule, strict, 0) ? GameContent.Present : lost;
@@ -637,6 +641,20 @@ namespace RetroArr.Core.Games
         private static bool NamedAfter(string name, string stem) =>
             name.Length > stem.Length && name.StartsWith(stem, StringComparison.OrdinalIgnoreCase)
             && (name[stem.Length] == '.' || name.AsSpan(stem.Length).StartsWith(" (") || name.AsSpan(stem.Length).StartsWith(" ["));
+
+        private static bool HasPs3DiscContent(string folder)
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(folder, "PS3_GAME", "PARAM.SFO"))) return true;
+                // One nested serial folder is common for NZBGet-unpacked PS3 disc releases.
+                foreach (var child in Directory.EnumerateDirectories(folder))
+                    if (File.Exists(Path.Combine(child, "PS3_GAME", "PARAM.SFO"))) return true;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return false;
+        }
 
         private static bool FolderHasContent(DirectoryInfo folder, PlatformRule rule, bool strict, int depth)
         {
@@ -1112,6 +1130,12 @@ namespace RetroArr.Core.Games
 
                 try
                 {
+                    // Empty catalogue placeholders are not installed games.
+                    if (scanPlatDef != null && platformKey.Equals("ps3", StringComparison.OrdinalIgnoreCase)
+                        && !HasPs3DiscContent(dir) && !Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                            .Any(f => new[] { ".iso", ".pkg", ".bin", ".ps3" }.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase)))
+                        continue;
+
                     // Advanced Scanner Logic V2: Find the best executable in the folder structure
                     var (bestExePath, isInstaller) = FindBestExecutable(dir, rule.Extensions, isExternal: false);
                     

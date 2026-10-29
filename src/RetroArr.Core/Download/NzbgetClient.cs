@@ -429,7 +429,7 @@ namespace RetroArr.Core.Download
                             Progress = 100,
                             State = MapHistoryStatus(item.GetProperty("Status").GetString()),
                             Category = item.GetProperty("Category").GetString(),
-                            DownloadPath = item.GetProperty("DestDir").GetString()
+                            DownloadPath = GetCompletedOutputPath(item)
                         });
                     }
                 }
@@ -440,6 +440,30 @@ namespace RetroArr.Core.Download
             }
 
             return statusList;
+        }
+
+        // NZBGet reports DestDir as a parent folder on some builds, and FinalDir on others.
+        // Never guess a job's output from its title unless a matching directory really exists.
+        private static string? GetCompletedOutputPath(JsonElement item)
+        {
+            static string? Field(JsonElement value, string name) =>
+                value.TryGetProperty(name, out var property) && property.ValueKind == JsonValueKind.String
+                    ? property.GetString() : null;
+
+            var finalDir = Field(item, "FinalDir");
+            if (!string.IsNullOrWhiteSpace(finalDir)) return finalDir;
+
+            var destDir = Field(item, "DestDir");
+            if (string.IsNullOrWhiteSpace(destDir)) return destDir;
+
+            var name = Field(item, "NZBName");
+            if (!string.IsNullOrWhiteSpace(name) && name != "." && name != ".." &&
+                name.IndexOfAny(new[] { '/', '\\' }) < 0)
+            {
+                var nested = Path.Combine(destDir, name);
+                if (Directory.Exists(nested)) return nested;
+            }
+            return destDir;
         }
 
         private async Task<JsonElement?> SendRpcRequestAsync(object request)
