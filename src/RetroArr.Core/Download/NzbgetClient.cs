@@ -118,15 +118,19 @@ namespace RetroArr.Core.Download
             throw new NotSupportedException("NZBGet does not handle torrent downloads. Configure qBittorrent, Transmission or Deluge as a torrent client.");
         }
 
-        // Search results from Prowlarr include the originating indexer ID. Fetch through
-        // Prowlarr so its configured indexer authentication, proxy and UA are used.
-        // The API key is sent ONLY to the configured Prowlarr origin.
+        // Search results from Prowlarr normally already contain a signed/proxied
+        // download URL. Its 'link' argument must be the ORIGINAL indexer link,
+        // not another Prowlarr proxy URL. Re-wrapping it causes Prowlarr to return
+        // "Invalid Prowlarr link" (HTTP 500).
         public Task<bool> AddNzbFromProwlarrAsync(string nzbUrl, int indexerId,
             string prowlarrBaseUrl, string prowlarrApiKey, string? category = null)
         {
-            if (indexerId <= 0 || string.IsNullOrWhiteSpace(prowlarrBaseUrl) ||
-                string.IsNullOrWhiteSpace(prowlarrApiKey))
-                return AddNzbAsync(nzbUrl, category);
+            if (!Uri.TryCreate(nzbUrl, UriKind.Absolute, out var releaseUri) ||
+                (releaseUri.Scheme != Uri.UriSchemeHttp && releaseUri.Scheme != Uri.UriSchemeHttps))
+            {
+                _logger.Warn("[NZBGet] Invalid release URL");
+                return Task.FromResult(false);
+            }
 
             if (!Uri.TryCreate(prowlarrBaseUrl, UriKind.Absolute, out var baseUri) ||
                 (baseUri.Scheme != Uri.UriSchemeHttp && baseUri.Scheme != Uri.UriSchemeHttps))
@@ -134,15 +138,28 @@ namespace RetroArr.Core.Download
                 _logger.Warn("[NZBGet] Invalid configured Prowlarr address");
                 return Task.FromResult(false);
             }
-            if (!Uri.TryCreate(nzbUrl, UriKind.Absolute, out var releaseUri) ||
-                (releaseUri.Scheme != Uri.UriSchemeHttp && releaseUri.Scheme != Uri.UriSchemeHttps))
+
+            var sameOrigin = releaseUri.Scheme == baseUri.Scheme &&
+                releaseUri.Host.Equals(baseUri.Host, StringComparison.OrdinalIgnoreCase) &&
+                releaseUri.Port == baseUri.Port;
+            // Prowlarr issues indexer download links itself in the search JSON.
+            // Using the URL unmodified is essential for Prowlarr's link validation.
+            if (sameOrigin)
             {
-                _logger.Warn("[NZBGet] Invalid indexer release URL");
-                return Task.FromResult(false);
+                if (!releaseUri.AbsolutePath.Contains("/api/v1/indexer/", StringComparison.OrdinalIgnoreCase) ||
+                    !releaseUri.AbsolutePath.EndsWith("/download", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.Warn("[NZBGet] Prowlarr search result does not contain a recognised download route");
+                    return Task.FromResult(false);
+                }
+                return AddNzbValidatedAsync(releaseUri, category, prowlarrApiKey, baseUri);
             }
-            // The release URL is URL-encoded as the 'link' parameter; never log it.
-            var endpoint = new Uri(baseUri, $"/api/v1/indexer/{indexerId}/download?link={Uri.EscapeDataString(nzbUrl)}");
-            return AddNzbValidatedAsync(endpoint, category, prowlarrApiKey, baseUri);
+
+            // Prowlarr sometimes supplies the upstream indexer URL directly.
+            // That URL may need indexer-specific headers/cookies, so never invent
+            // an untrusted proxy link and never send Prowlarr credentials to it.
+            _logger.Warn("[NZBGet] Prowlarr result uses an upstream download URL; attempting direct fetch without forwarding Prowlarr credentials");
+            return AddNzbValidatedAsync(releaseUri, category, null, null);
         }
 
         public Task<bool> AddNzbAsync(string nzbUrl, string? category = null)
@@ -197,7 +214,8 @@ namespace RetroArr.Core.Download
                             HttpCompletionOption.ResponseHeadersRead);
                         nzbResponse = redirectedResponse;
                     }
-                    nzbResponse.EnsureSuccessStatusCode();
+                    if (!nzbResponse.IsSuccessStatusCode)
+                        throw new InvalidDataException($"NZB fetch returned HTTP {(int)nzbResponse.StatusCode} from {(prowlarrOrigin != null ? "Prowlarr proxy" : "indexer host")}");
                 const long maxNzbSize = 32L * 1024 * 1024;
                 if (nzbResponse.Content.Headers.ContentLength > maxNzbSize)
                     throw new InvalidDataException("Indexer NZB response exceeds 32 MiB");
