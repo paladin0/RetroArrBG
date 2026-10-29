@@ -146,8 +146,18 @@ namespace RetroArr.Core.Download
             // Using the URL unmodified is essential for Prowlarr's link validation.
             if (sameOrigin)
             {
-                if (!releaseUri.AbsolutePath.Contains("/api/v1/indexer/", StringComparison.OrdinalIgnoreCase) ||
-                    !releaseUri.AbsolutePath.EndsWith("/download", StringComparison.OrdinalIgnoreCase))
+                // Prowlarr search results use both /{id}/download (for example
+                // /1/download?apikey=...&file=...&link=...) and the API-form
+                // /api/v1/indexer/{id}/download. Both are already complete
+                // authenticated proxy links. Never re-wrap or re-encode them.
+                // Only accept these routes from the configured Prowlarr origin.
+                var path = releaseUri.AbsolutePath.TrimEnd('/');
+                var recognisedDownloadRoute = System.Text.RegularExpressions.Regex.IsMatch(
+                    path,
+                    @"(?:^|/)(?:api/v1/indexer/)?[0-9]+/download$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+                    System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+                if (!recognisedDownloadRoute)
                 {
                     _logger.Warn("[NZBGet] Prowlarr search result does not contain a recognised download route");
                     return Task.FromResult(false);
