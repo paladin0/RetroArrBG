@@ -122,11 +122,34 @@ namespace RetroArr.Core.Download
         {
             try
             {
-                // Downloading NZB content first to be safe and compatible
-                using var nzbDownloader = new HttpClient();
-                using var nzbResponse = await nzbDownloader.GetAsync(nzbUrl);
+                // Fetch the actual NZB with a declared user agent. Some Newznab indexers
+                // return HTTP 200 with <error code="109" .../> to anonymous HTTP clients.
+                using var nzbDownloader = new HttpClient(new HttpClientHandler
+                {
+                    AutomaticDecompression = System.Net.DecompressionMethods.All
+                }) { Timeout = TimeSpan.FromSeconds(60) };
+                nzbDownloader.DefaultRequestHeaders.UserAgent.ParseAdd(
+                    "Mozilla/5.0 (compatible; RetroArr/1.0; +https://github.com/paladin0/RetroArrBG)");
+                nzbDownloader.DefaultRequestHeaders.Accept.ParseAdd("application/x-nzb");
+                nzbDownloader.DefaultRequestHeaders.Accept.ParseAdd("application/xml");
+                using var nzbResponse = await nzbDownloader.GetAsync(nzbUrl,
+                    HttpCompletionOption.ResponseHeadersRead);
                 nzbResponse.EnsureSuccessStatusCode();
-                var nzbBytes = await nzbResponse.Content.ReadAsByteArrayAsync();
+                const long maxNzbSize = 32L * 1024 * 1024;
+                if (nzbResponse.Content.Headers.ContentLength > maxNzbSize)
+                    throw new InvalidDataException("Indexer NZB response exceeds 32 MiB");
+                using var nzbStream = await nzbResponse.Content.ReadAsStreamAsync();
+                using var limitedBuffer = new MemoryStream();
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await nzbStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                {
+                    if (limitedBuffer.Length + read > maxNzbSize)
+                        throw new InvalidDataException("Indexer NZB response exceeds 32 MiB");
+                    limitedBuffer.Write(buffer, 0, read);
+                }
+                var nzbBytes = limitedBuffer.ToArray();
+                ValidateNzbContent(nzbBytes);
                 var nzbBase64 = Convert.ToBase64String(nzbBytes);
                 
                 var appendRequest = new
@@ -168,6 +191,45 @@ namespace RetroArr.Core.Download
             {
                 _logger.Error($"[NZBGet] Error adding NZB: {ex.Message}");
                 return false;
+            }
+        }
+
+        private static void ValidateNzbContent(byte[] nzbBytes)
+        {
+            if (nzbBytes.Length == 0)
+                throw new InvalidDataException("Indexer returned an empty NZB");
+            try
+            {
+                // Prohibit DTD/entity expansion. An indexer error may be valid XML,
+                // but it is never a usable NZB even when the HTTP response was 200.
+                using var stream = new MemoryStream(nzbBytes, writable: false);
+                using var xmlReader = System.Xml.XmlReader.Create(stream,
+                    new System.Xml.XmlReaderSettings
+                    {
+                        DtdProcessing = System.Xml.DtdProcessing.Prohibit,
+                        XmlResolver = null,
+                        MaxCharactersInDocument = 32L * 1024 * 1024
+                    });
+                var document = System.Xml.Linq.XDocument.Load(xmlReader);
+                var root = document.Root;
+                if (root == null)
+                    throw new InvalidDataException("Indexer returned empty XML");
+                if (root.Name.LocalName.Equals("error", StringComparison.OrdinalIgnoreCase))
+                {
+                    var code = root.Attribute("code")?.Value ?? "unknown";
+                    var description = root.Attribute("description")?.Value ?? "indexer error";
+                    // Keep descriptions short and avoid spilling query strings or credentials to logs.
+                    if (description.Length > 160) description = description[..160];
+                    throw new InvalidDataException($"Indexer returned XML error {code}: {description}");
+                }
+                if (!root.Name.LocalName.Equals("nzb", StringComparison.OrdinalIgnoreCase) ||
+                    !root.Descendants().Any(e => e.Name.LocalName == "segment" &&
+                                                !string.IsNullOrWhiteSpace(e.Value)))
+                    throw new InvalidDataException("Indexer response is not an NZB with message segments");
+            }
+            catch (System.Xml.XmlException ex)
+            {
+                throw new InvalidDataException("Indexer returned malformed NZB XML", ex);
             }
         }
 
