@@ -526,6 +526,9 @@ namespace RetroArr.Api.V3.DownloadClients
                         request.UrlBase
                     );
 
+                    // V29: the NZBGet branch previously never ran a connection test,
+                    // leaving isConnected=false for every correctly configured server.
+                    isConnected = await nzbClient.TestConnectionAsync();
                     if (isConnected)
                     {
                         version = await nzbClient.GetVersionAsync();

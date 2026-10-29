@@ -288,15 +288,20 @@ namespace RetroArr.Core.Download.TrackedDownloads
                 if (clientConfig.Implementation.Equals("NZBGet", StringComparison.OrdinalIgnoreCase))
                 {
                     var normalized = outputPath.Replace('\\', '/');
-                    foreach (var prefix in new[] { "/mnt/Media/downloads", "/media/downloads" })
+                    foreach (var prefix in new[] { "/mnt/Media/downloads", "/media/downloads", "/completed" })
                     {
                         if (!normalized.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase)) continue;
-                        var local = Path.Combine("/downloads", normalized.Substring(prefix.Length).TrimStart('/'));
+                        var local = Path.Combine(prefix == "/completed" ? "/downloads/completed" : "/downloads",
+                            normalized.Substring(prefix.Length).TrimStart('/'));
                         if (File.Exists(local) || Directory.Exists(local)) return local;
                     }
                 }
                 return outputPath;
             }
+            // Some NZBGet installations report /downloads/completed while others report
+            // /completed. A mapped path already accessible inside RetroArr must not be
+            // mapped a second time (which would produce /downloads/completed/downloads/...).
+            if (File.Exists(outputPath) || Directory.Exists(outputPath)) return outputPath;
             if (!outputPath.StartsWith(clientConfig.RemotePathMapping, StringComparison.OrdinalIgnoreCase)) return null;
             var relative = outputPath.Substring(clientConfig.RemotePathMapping.Length).TrimStart('/', '\\');
             return Path.Combine(clientConfig.LocalPathMapping, relative);

@@ -454,7 +454,7 @@ namespace RetroArr.Core.Download
             if (!string.IsNullOrWhiteSpace(finalDir)) return finalDir;
 
             var destDir = Field(item, "DestDir");
-            if (string.IsNullOrWhiteSpace(destDir)) return destDir;
+            if (string.IsNullOrWhiteSpace(destDir)) return null;
 
             var name = Field(item, "NZBName");
             if (!string.IsNullOrWhiteSpace(name) && name != "." && name != ".." &&
