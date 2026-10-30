@@ -97,17 +97,31 @@ namespace RetroArr.Core.Search
             try
             {
                 raw = await RunSearchAsync(query, result.ProviderErrors, ct).ConfigureAwait(false);
-                // Newznab releases often use the platform at the FRONT, a scene alias,
-                // or punctuation-separated titles. Stop at the first plausible game
-                // category and cap extra requests to avoid hammering the indexers.
-                if (!raw.Any(IsIndividualGameRelease))
+                // Search results can be for a different platform even when the title
+                // matches perfectly. Only stop trying platform aliases after the
+                // scorer finds at least one eligible release for THIS game.
+                // This is deliberately capped to avoid hammering indexers during sweeps.
+                var blocked = await LoadBlacklistAsync().ConfigureAwait(false);
+                bool HasEligibleRelease(IEnumerable<SearchResult> releases)
+                {
+                    foreach (var release in releases)
+                    {
+                        if (!IsIndividualGameRelease(release)) continue;
+                        PlatformDetector.DetectPlatform(release);
+                        if (_scorer.Score(release, game, settings, blocked).Decision != ReleaseDecision.Reject)
+                            return true;
+                    }
+                    return false;
+                }
+
+                if (!HasEligibleRelease(raw))
                 {
                     foreach (var variant in BuildSearchVariants(game, query).Take(4))
                     {
                         ct.ThrowIfCancellationRequested();
                         result.Queries.Add(variant);
                         raw.AddRange(await RunSearchAsync(variant, result.ProviderErrors, ct).ConfigureAwait(false));
-                        if (raw.Any(IsIndividualGameRelease)) break;
+                        if (HasEligibleRelease(raw)) break;
                     }
                 }
             }
@@ -326,6 +340,9 @@ namespace RetroArr.Core.Search
                 "psx" or "ps1" or "playstation" => new[] { "PSX", "PS1", "PlayStation" },
                 "ps2" => new[] { "PS2", "PlayStation 2", "PS2 ISO" },
                 "ps3" => new[] { "PS3", "PlayStation 3" },
+                "xbox360" or "x360" => new[] { "XBOX360", "X360", "Xbox 360" },
+                "xbox" => new[] { "XBOX", "Original Xbox" },
+                "dos" or "msdos" => new[] { "DOS", "MS-DOS", "IBM PC" },
                 "psp" => new[] { "PSP", "PlayStation Portable" },
                 "gb" => new[] { "Game Boy", "GB" },
                 "gbc" => new[] { "Game Boy Color", "GBC" },
